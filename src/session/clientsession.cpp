@@ -140,20 +140,50 @@ void ClientSession::in_recv(const string &data) {
                 destroy();
                 return;
             }
-            bool has_method = false;
+            uint32_t srv_auth = config.local_username == "" ? (1<<0) : (1<<1);
+            uint32_t cli_auth = 0; // bit 0 : no auth , bit 1: auto by password
             for (int i = 2; i < data[1] + 2; ++i) {
                 if (data[i] == 0) {
-                    has_method = true;
-                    break;
+                    cli_auth |= 1;
+                } else if (data[i] == 0x02) {
+                    cli_auth |= (1<<1);
                 }
             }
-            if (!has_method) {
+            if ((cli_auth & srv_auth) == 0) {
                 Log::log_with_endpoint(in_endpoint, "unsupported auth method", Log::ERROR);
                 in_async_write(string("\x05\xff", 2));
                 status = INVALID;
                 return;
             }
-            in_async_write(string("\x05\x00", 2));
+            if ((cli_auth & 1) && (srv_auth & 1))
+                in_async_write(string("\x05\x00", 2));
+            else {
+                if (srv_auth & 2) {
+                    status = HANDSHAKE_AUTH;
+                    /* AUTH_PASSWD required. */
+                    in_async_write(string("\x05\x02", 2));
+                }
+            }
+            break;
+        }
+        case HANDSHAKE_AUTH: {
+            if (data.length() < 3 || data[0] != 1 || data.length() < (unsigned)data[1] + 3 
+                || data.length() != (unsigned int)(unsigned char)data[1] + 3 + (unsigned char)data[data[1] + 2]) {
+                Log::log_with_endpoint(in_endpoint, "unknown protocol", Log::ERROR);
+                destroy();
+                return;
+            }
+            string username = data.substr(2, (int)data[1]);
+            string password = data.substr(3 + (int)data[1], data[data[1] + 2]);
+            if (username != config.local_username || password != config.local_password) {
+                in_async_write(string("\x01\x01", 2));
+                status = INVALID;
+                Log::log_with_endpoint(in_endpoint, "Auth failed: " + username + "/" + password, Log::WARN);
+            }else {
+                in_async_write(string("\x01\x00", 2));
+                status = HANDSHAKE;
+            }
+
             break;
         }
         case REQUEST: {
@@ -215,6 +245,11 @@ void ClientSession::in_sent() {
             in_async_read();
             break;
         }
+        case HANDSHAKE_AUTH: {
+            in_async_read();
+            break;
+        }
+
         case REQUEST: {
             status = CONNECT;
             in_async_read();

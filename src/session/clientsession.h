@@ -27,6 +27,7 @@ class ClientSession : public Session {
 private:
     enum Status {
         HANDSHAKE,
+        HANDSHAKE_AUTH,
         REQUEST,
         CONNECT,
         FORWARD,
